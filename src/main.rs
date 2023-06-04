@@ -13,7 +13,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use rusqlite::{Connection, Result as SqliteResult};
+use rusqlite::Connection;
 use rust_embed::RustEmbed;
 use tokio::sync::{broadcast, Mutex};
 
@@ -179,6 +179,16 @@ async fn events_websocket(
 }
 
 async fn stream_events(app_state: AppState, mut ws: WebSocket) {
+    // if in debug mode, tell the front-end so it can close the window when the backend dies
+    #[cfg(debug_assertions)]
+    {
+        let _ = ws
+            .send(Message::Text(
+                r#"{"debug_mode": true}"#.to_string(),
+            ))
+            .await;
+    }
+
     let mut rx = app_state.tx.subscribe();
 
     loop {
