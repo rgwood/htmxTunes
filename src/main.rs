@@ -47,6 +47,7 @@ fn main() -> Result<()> {
             .route("/search", get(search))
             .route("/tracks", get(tracks_table))
             .route("/sort/:sort_by", post(sort))
+            .route("/play/:id", post(play))
             .route("/events", get(events_websocket))
             .route("/*file", get(static_handler))
             .with_state(state);
@@ -109,11 +110,19 @@ async fn sort(State(state): State<AppState>, Path(sort_by): Path<String>) -> imp
 }
 
 #[axum::debug_handler]
+async fn play(Path(id): Path<String>) -> impl IntoResponse {
+    eprintln!("play track: {id}");
+    // TODO: play track
+    Html("<div id='playback-icon' hx-swap-oob='innerHTML'>▶️</div>")
+}
+
+#[axum::debug_handler]
 async fn tracks_table(State(state): State<AppState>) -> impl IntoResponse {
     tracks_html(state).await
 }
 
 struct Track {
+    id: i64,
     artist: String,
     album: String,
     track: String,
@@ -138,7 +147,7 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
     let conn = sqlite::open("chinook.db").unwrap();
     let mut sql = r#"
     with result as (
-        select ar.Name Artist, al.Title Album, t.Name Track, t.Milliseconds / 1000 Seconds
+        select t.TrackId, ar.Name Artist, al.Title Album, t.Name Track, t.Milliseconds / 1000 Seconds
         from artists ar
         join albums al on ar.ArtistId = al.ArtistId
         join tracks t on al.AlbumId = t.AlbumId
@@ -159,10 +168,11 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
     .map(|row| row.unwrap())
     .map(|row| {
         Track {
-            artist: row.read::<&str, _>(0).to_string(),
-            album: row.read::<&str, _>(1).to_string(),
-            track: row.read::<&str, _>(2).to_string(),
-            seconds: row.read::<i64, _>(3),
+            id: row.read::<i64, _>(0),
+            artist: row.read::<&str, _>(1).to_string(),
+            album: row.read::<&str, _>(2).to_string(),
+            track: row.read::<&str, _>(3).to_string(),
+            seconds: row.read::<i64, _>(4),
         }
     })
     .filter(|track| {
@@ -191,12 +201,13 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
         // let track = track.unwrap();
         let len_s = track.seconds;
         table.push_str(&format!(
-            r#"<tr class="even:bg-cyan-900">
+            r#"<tr class="even:bg-cyan-900" hx-post="/play/{}" hx-trigger="click" hx-swap="none">
         <td>{}</td>
         <td>{}</td>
         <td>{}</td>
         <td>{}</td>
       </tr>"#,
+            track.id,
             track.artist,
             track.album,
             track.track,
