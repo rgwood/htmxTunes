@@ -13,7 +13,6 @@ use axum::{
     Router,
 };
 use clap::Parser;
-// use rusqlite::Connection;
 use rust_embed::RustEmbed;
 use serde::Deserialize;
 use tokio::sync::{broadcast, Mutex};
@@ -43,7 +42,6 @@ fn main() -> Result<()> {
     let _webserver = rt.spawn(async move {
         let app = Router::new()
             .route("/", get(root))
-            .route("/clicked", post(clicked))
             .route("/search", get(search))
             .route("/tracks", get(tracks_table))
             .route("/sort/:sort_by", post(sort))
@@ -99,11 +97,6 @@ async fn search(State(state): State<AppState>, Query(params): Query<SearchParams
 }
 
 #[axum::debug_handler]
-async fn clicked() -> impl IntoResponse {
-    Html("<div>clicked</div>")
-}
-
-#[axum::debug_handler]
 async fn sort(State(state): State<AppState>, Path(sort_by): Path<String>) -> impl IntoResponse {
     state.sort_by.lock().await.replace(sort_by);
     tracks_html(state).await
@@ -143,7 +136,6 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
         .into();
 
     // TODO what's a better way to do error handling in a handler?
-    // let conn = Connection::open("chinook.db").unwrap();
     let conn = sqlite::open("chinook.db").unwrap();
     let mut sql = r#"
     with result as (
@@ -184,21 +176,10 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
         true
     });
 
-    // let mut stmt = conn.prepare(sql.as_str()).unwrap();
-    // let iter = stmt.query_map([], |row| {
-    //     Ok(Track {
-    //         artist: row.get(0)?,
-    //         album: row.get(1)?,
-    //         track: row.get(2)?,
-    //         seconds: row.get(3)?,
-    //     })
-    // }).unwrap();
-
     let start = std::time::Instant::now();
     let mut row_count = 0;
     for track in iter {
         row_count += 1;
-        // let track = track.unwrap();
         let len_s = track.seconds;
         table.push_str(&format!(
             r#"<tr class="even:bg-cyan-900" hx-post="/play/{}" hx-trigger="click" hx-swap="none">
