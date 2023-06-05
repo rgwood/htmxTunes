@@ -16,6 +16,11 @@
         <div class="grow text-center">⏸️</div>
         <div id="track-count">123</div>
     </div>
+    <input type="text" class="w-full bg-slate-900 px-1 mb-2"
+    name="search" hx-get="/search"
+    hx-trigger="keyup changed"
+    placeholder="Search"></input>
+    <!-- Can throttle searches with `delay:200ms` but I don't think we need to -->
   <!-- load tracks on startup -->
   <table id="tracks" hx-get="/tracks" hx-trigger="load"></table>
   <script type="module" src="/script.js"></script>

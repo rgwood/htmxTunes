@@ -5,7 +5,7 @@ use axum::{
     body::{boxed, BoxBody, Full},
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade, Path,
+        State, WebSocketUpgrade, Path, Query,
     },
     http::{header, Response, StatusCode, Uri},
     response::{Html, IntoResponse},
@@ -13,8 +13,9 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use rusqlite::Connection;
+// use rusqlite::Connection;
 use rust_embed::RustEmbed;
+use serde::Deserialize;
 use tokio::sync::{broadcast, Mutex};
 
 #[derive(clap::Parser, Clone)]
@@ -31,7 +32,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let (tx, _rx) = broadcast::channel::<String>(10000); // capacity arbitrarily chosen
-    let state = AppState { tx: tx.clone(), sort_by: Arc::new(Mutex::new(None)) };
+    let state = AppState {
+        tx: tx.clone(),
+        sort_by: Arc::new(Mutex::new(None)),
+        search_filter: Arc::new(Mutex::new(None))
+    };
 
     // start web server and attempt to open it in browser
     let rt = tokio::runtime::Runtime::new()?;
@@ -39,6 +44,7 @@ fn main() -> Result<()> {
         let app = Router::new()
             .route("/", get(root))
             .route("/clicked", post(clicked))
+            .route("/search", get(search))
             .route("/tracks", get(tracks_table))
             .route("/sort/:sort_by", post(sort))
             .route("/events", get(events_websocket))
@@ -71,12 +77,24 @@ fn initialize_environment() {
 struct AppState {
     // TODO: replace String with whatever type you want to send to the UI
     tx: broadcast::Sender<String>,
-    sort_by: Arc<Mutex<Option<String>>>
+    sort_by: Arc<Mutex<Option<String>>>,
+    search_filter: Arc<Mutex<Option<String>>>
 }
 
 #[axum::debug_handler]
 async fn root() -> impl IntoResponse {
     Html(include_str!("../embed/index.html"))
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchParams {
+    search: String,
+}
+
+#[axum::debug_handler]
+async fn search(State(state): State<AppState>, Query(params): Query<SearchParams>) -> impl IntoResponse {
+    state.search_filter.lock().await.replace(params.search.to_lowercase());
+    tracks_html(state).await
 }
 
 #[axum::debug_handler]
@@ -95,6 +113,13 @@ async fn tracks_table(State(state): State<AppState>) -> impl IntoResponse {
     tracks_html(state).await
 }
 
+struct Track {
+    artist: String,
+    album: String,
+    track: String,
+    seconds: i64,
+}
+
 async fn tracks_html(state: AppState) -> impl IntoResponse {
     let mut table: String = r#"<table id="tracks" hx-swap-oob='true' class="table-fixed">
     <thead class="bg-cyan-900">
@@ -109,7 +134,8 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
         .into();
 
     // TODO what's a better way to do error handling in a handler?
-    let conn = Connection::open("chinook.db").unwrap();
+    // let conn = Connection::open("chinook.db").unwrap();
+    let conn = sqlite::open("chinook.db").unwrap();
     let mut sql = r#"
     with result as (
         select ar.Name Artist, al.Title Album, t.Name Track, t.Milliseconds / 1000 Seconds
@@ -125,18 +151,45 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
 
     eprintln!("sql: {}", sql);
 
-    let mut stmt = conn.prepare(sql.as_str()).unwrap();
+    let filter = state.search_filter.lock().await;
 
-    let mut rows = stmt.query([]).unwrap();
+    // TODO: move search into SQL maybe? might be faster...
+    let iter = conn.prepare(sql).unwrap()
+    .into_iter()
+    .map(|row| row.unwrap())
+    .map(|row| {
+        Track {
+            artist: row.read::<&str, _>(0).to_string(),
+            album: row.read::<&str, _>(1).to_string(),
+            track: row.read::<&str, _>(2).to_string(),
+            seconds: row.read::<i64, _>(3),
+        }
+    })
+    .filter(|track| {
+        if let Some(filter) = filter.as_ref() {
+            return track.artist.to_lowercase().contains(filter)
+                || track.album.to_lowercase().contains(filter)
+                || track.track.to_lowercase().contains(filter);
+        }
+        true
+    });
+
+    // let mut stmt = conn.prepare(sql.as_str()).unwrap();
+    // let iter = stmt.query_map([], |row| {
+    //     Ok(Track {
+    //         artist: row.get(0)?,
+    //         album: row.get(1)?,
+    //         track: row.get(2)?,
+    //         seconds: row.get(3)?,
+    //     })
+    // }).unwrap();
+
+    let start = std::time::Instant::now();
     let mut row_count = 0;
-
-    while let Some(row) = rows.next().unwrap() {
+    for track in iter {
         row_count += 1;
-        let len_s = row.get::<_, i64>(3).unwrap();
-        let len_m = len_s / 60;
-        let len_s = len_s % 60;
-        let len = format!("{}:{:02}", len_m, len_s);
-
+        // let track = track.unwrap();
+        let len_s = track.seconds;
         table.push_str(&format!(
             r#"<tr class="even:bg-cyan-900">
         <td>{}</td>
@@ -144,12 +197,39 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
         <td>{}</td>
         <td>{}</td>
       </tr>"#,
-            row.get::<_, String>(0).unwrap(),
-            row.get::<_, String>(1).unwrap(),
-            row.get::<_, String>(2).unwrap(),
-            len,
+            track.artist,
+            track.album,
+            track.track,
+            format!("{}:{:02}", len_s / 60, len_s % 60),
         ));
     }
+
+    let elapsed = start.elapsed();
+    eprintln!("read+rendered tracks in: {:?}", elapsed);
+
+    // let mut rows = stmt.query([]).unwrap();
+
+
+    // while let Some(row) = rows.next().unwrap() {
+    //     row_count += 1;
+    //     let len_s = row.get::<_, i64>(3).unwrap();
+    //     let len_m = len_s / 60;
+    //     let len_s = len_s % 60;
+    //     let len = format!("{}:{:02}", len_m, len_s);
+
+    //     table.push_str(&format!(
+    //         r#"<tr class="even:bg-cyan-900">
+    //     <td>{}</td>
+    //     <td>{}</td>
+    //     <td>{}</td>
+    //     <td>{}</td>
+    //   </tr>"#,
+    //         row.get::<_, String>(0).unwrap(),
+    //         row.get::<_, String>(1).unwrap(),
+    //         row.get::<_, String>(2).unwrap(),
+    //         len,
+    //     ));
+    // }
 
     table.push_str("</tbody></table>");
 
