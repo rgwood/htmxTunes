@@ -1,3 +1,3 @@
-# Rust+Preact+Tailwind template
+# htmxTunes
 
-A little template for making tools like [escape-artist](https://github.com/rgwood/escape-artist); apps that run locally (or not!) and serve data to a web UI.
+Just screwing around making a music player UI with HTMX, Axum, and SQLite. Doesn't actually play music yet!
