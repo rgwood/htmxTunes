@@ -394,6 +394,7 @@ dependencies = [
  "axum",
  "clap",
  "mime_guess",
+ "minijinja",
  "open",
  "rand",
  "rust-embed",
@@ -576,6 +577,15 @@ checksum = "4192263c238a5f0d0c6bfd21f336a313a4ce1c450542449ca191bb657b4642ef"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "minijinja"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75aa91cba87dcad6af3e53bc7adb9c99755eba2d49b6c5f10dbcc79d4727c1bd"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

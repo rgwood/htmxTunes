@@ -1,11 +1,17 @@
-use std::{eprintln, net::SocketAddr, thread, time::Duration, sync::Arc};
+use std::{
+    eprintln,
+    net::SocketAddr,
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
 use anyhow::Result;
 use axum::{
     body::{boxed, BoxBody, Full},
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade, Path, Query,
+        Path, Query, State, WebSocketUpgrade,
     },
     http::{header, Response, StatusCode, Uri},
     response::{Html, IntoResponse},
@@ -13,6 +19,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use minijinja::render;
 use rust_embed::RustEmbed;
 use serde::Deserialize;
 use tokio::sync::{broadcast, Mutex};
@@ -34,7 +41,7 @@ fn main() -> Result<()> {
     let state = AppState {
         tx: tx.clone(),
         sort_by: Arc::new(Mutex::new(None)),
-        search_filter: Arc::new(Mutex::new(None))
+        search_filter: Arc::new(Mutex::new(None)),
     };
 
     // start web server and attempt to open it in browser
@@ -77,12 +84,33 @@ struct AppState {
     // TODO: replace String with whatever type you want to send to the UI
     tx: broadcast::Sender<String>,
     sort_by: Arc<Mutex<Option<String>>>,
-    search_filter: Arc<Mutex<Option<String>>>
+    search_filter: Arc<Mutex<Option<String>>>,
 }
 
 #[axum::debug_handler]
 async fn root() -> impl IntoResponse {
-    Html(include_str!("../embed/index.html"))
+    Html(render_template!("index.html", version => "0.123"))
+}
+
+#[derive(RustEmbed)]
+#[folder = "templates/"]
+struct TemplateFile;
+
+#[macro_export]
+macro_rules! render_template {
+    (
+        $tmpl:expr
+        $(, $key:ident $(=> $value:expr)?)* $(,)?
+    ) => {
+        {
+            let template = TemplateFile::get($tmpl).unwrap();
+            let data = template.data;
+            let template_str = std::str::from_utf8(&data).unwrap();
+            // TODO maybe I should keep a minijinja environment around to avoid unnecessary work?
+            // revisit if this is too slow
+            render!(template_str, $($key $(=> $value)? ,)*)
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,8 +119,15 @@ struct SearchParams {
 }
 
 #[axum::debug_handler]
-async fn search(State(state): State<AppState>, Query(params): Query<SearchParams>) -> impl IntoResponse {
-    state.search_filter.lock().await.replace(params.search.to_lowercase());
+async fn search(
+    State(state): State<AppState>,
+    Query(params): Query<SearchParams>,
+) -> impl IntoResponse {
+    state
+        .search_filter
+        .lock()
+        .await
+        .replace(params.search.to_lowercase());
     tracks_html(state).await
 }
 
@@ -155,26 +190,26 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
     let filter = state.search_filter.lock().await;
 
     // TODO: move search into SQL maybe? might be faster...
-    let iter = conn.prepare(sql).unwrap()
-    .into_iter()
-    .map(|row| row.unwrap())
-    .map(|row| {
-        Track {
+    let iter = conn
+        .prepare(sql)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.unwrap())
+        .map(|row| Track {
             id: row.read::<i64, _>(0),
             artist: row.read::<&str, _>(1).to_string(),
             album: row.read::<&str, _>(2).to_string(),
             track: row.read::<&str, _>(3).to_string(),
             seconds: row.read::<i64, _>(4),
-        }
-    })
-    .filter(|track| {
-        if let Some(filter) = filter.as_ref() {
-            return track.artist.to_lowercase().contains(filter)
-                || track.album.to_lowercase().contains(filter)
-                || track.track.to_lowercase().contains(filter);
-        }
-        true
-    });
+        })
+        .filter(|track| {
+            if let Some(filter) = filter.as_ref() {
+                return track.artist.to_lowercase().contains(filter)
+                    || track.album.to_lowercase().contains(filter)
+                    || track.track.to_lowercase().contains(filter);
+            }
+            true
+        });
 
     let start = std::time::Instant::now();
     let mut row_count = 0;
@@ -200,7 +235,6 @@ async fn tracks_html(state: AppState) -> impl IntoResponse {
     eprintln!("read+rendered tracks in: {:?}", elapsed);
 
     // let mut rows = stmt.query([]).unwrap();
-
 
     // while let Some(row) = rows.next().unwrap() {
     //     row_count += 1;
@@ -255,9 +289,7 @@ async fn stream_events(app_state: AppState, mut ws: WebSocket) {
     #[cfg(debug_assertions)]
     {
         let _ = ws
-            .send(Message::Text(
-                r#"{"debug_mode": true}"#.to_string(),
-            ))
+            .send(Message::Text(r#"{"debug_mode": true}"#.to_string()))
             .await;
     }
 
